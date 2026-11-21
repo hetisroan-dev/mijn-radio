@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>24/7 Live Radio</title>
+<style>
+:root { --bg: #0f172a; --card: #1e293b; --accent: #22c55e; --text: #f8fafc; --muted: #94a3b8; --border: rgba(148,163,184,0.16); }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+.player { background: var(--card); width: 100%; max-width: 440px; border-radius: 20px; padding: 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.4); text-align: center; }
+.badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(34,197,94,0.15); color: var(--accent); padding: 6px 14px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; margin-bottom: 1.2rem; }
+.dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+h1 { font-size: 1.5rem; margin-bottom: 0.4rem; }
+.sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.8rem; }
+.now-playing { background: rgba(15,23,42,0.6); border-radius: 14px; padding: 1.2rem; margin-bottom: 1.6rem; min-height: 82px; display: flex; flex-direction: column; justify-content: center; }
+.np-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.4rem; }
+.np-track { font-size: 1.1rem; font-weight: 600; word-break: break-word; }
+.btn { width: 100%; padding: 1rem; border: none; border-radius: 14px; background: var(--accent); color: #052e16; font-size: 1.1rem; font-weight: 700; cursor: pointer; }
+.vol-row { display: flex; align-items: center; gap: 12px; margin-top: 1.3rem; color: var(--muted); font-size: 0.9rem; }
+input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.history { margin-top: 1.6rem; text-align: left; border-top: 1px solid var(--border); padding-top: 1.1rem; }
+.history-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.6rem; }
+.history-list { list-style: none; display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.9rem; color: var(--muted); }
+.history-list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<div class="player">
+<div class="badge"><span class="dot"></span> <span id="status">24/7 LIVE</span></div>
+<h1>Mijn Eigen Radio</h1>
+<p class="sub">24/7 Auto-DJ &amp; Live Stream</p>
+
+<div class="now-playing">
+  <div class="np-label">Nu aan het spelen</div>
+  <div class="np-track" id="track">Laden...</div>
+</div>
+
+<button class="btn" id="playBtn">▶ Luister Live</button>
+
+<div class="vol-row">
+  <span>Volume</span>
+  <input type="range" id="vol" min="0" max="1" step="0.02" value="0.85">
+</div>
+
+<div class="history">
+  <div class="history-title">Recent gedraaid</div>
+  <ul class="history-list" id="historyList">
+    <li>Nog geen eerdere nummers in deze sessie</li>
+  </ul>
+</div>
+
+<audio id="audio" preload="none"></audio>
+</div>
+
+<script>
+const STREAM_URL = 'http://192.168.178.43:8000/stream';
+const STATUS_URL = 'http://192.168.178.43:8000/status-json.xsl';
+
+const audio = document.getElementById('audio');
+const playBtn = document.getElementById('playBtn');
+const vol = document.getElementById('vol');
+const trackEl = document.getElementById('track');
+const statusEl = document.getElementById('status');
+const historyList = document.getElementById('historyList');
+let playing = false;
+let currentTrack = null;
+let reconnectTimer = null;
+const history = [];
+
+audio.volume = vol.value;
+vol.addEventListener('input', () => { audio.volume = vol.value; });
+
+function startStream() {
+  clearTimeout(reconnectTimer);
+  const sep = STREAM_URL.includes('?') ? '&' : '?';
+  audio.src = STREAM_URL + sep + 't=' + Date.now();
+  audio.play().catch(() => {});
+  playing = true;
+  playBtn.textContent = '⏸ Pauzeren';
+}
+
+function stopStream() {
+  clearTimeout(reconnectTimer);
+  playing = false;
+  audio.pause();
+  audio.src = '';
+  playBtn.textContent = '▶ Luister Live';
+}
+
+audio.addEventListener('error', () => {
+  if (!playing) return;
+  reconnectTimer = setTimeout(() => { if (playing) startStream(); }, 3000);
+});
+
+playBtn.addEventListener('click', () => {
+  if (!playing) startStream();
+  else stopStream();
+});
+
+function renderHistory() {
+  if (history.length === 0) return;
+  historyList.innerHTML = history.map(item => `<li>• ${item}</li>`).join('');
+}
+
+function setTrack(title) {
+  if (currentTrack && currentTrack !== title && !currentTrack.startsWith('Geen actieve') && !currentTrack.startsWith('Verbinden') && currentTrack !== 'Laden...') {
+    history.unshift(currentTrack);
+    if (history.length > 5) history.pop();
+    renderHistory();
+  }
+  currentTrack = title;
+  trackEl.textContent = title;
+}
+
+async function updateNowPlaying() {
+  try {
+    const sep = STATUS_URL.includes('?') ? '&' : '?';
+    const res = await fetch(STATUS_URL + sep + 't=' + Date.now());
+    const data = await res.json();
+    let src = data.icestats && data.icestats.source;
+    if (Array.isArray(src)) {
+      src = src.find(s => (s.listenurl || '').endsWith('/stream')) || src[0];
+    }
+    if (src) {
+      const title = src.title || (src.artist ? `${src.artist} - ${src.title}` : 'Onbekend nummer');
+      setTrack(title);
+      statusEl.textContent = '24/7 LIVE';
+    } else {
+      setTrack('Geen actieve bron');
+      statusEl.textContent = 'OFFLINE';
+    }
+  } catch (e) {
+    setTrack('Verbinden met stream...');
+  }
+}
+
+updateNowPlaying();
+setInterval(updateNowPlaying, 5000);
+</script>
+</body>
+</html>
